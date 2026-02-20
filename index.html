@@ -28,10 +28,10 @@
 
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // WebRTCのシグナリングに必要な doc, setDoc, getDoc, updateDoc 等を追加
+        import { getFirestore, collection, addDoc, onSnapshot, query, doc, setDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // いただいたFirebase設定をここで初期化
         const firebaseConfig = {
             apiKey: "AIzaSyDqbtZUCkdO4p7nCFBPEVO4XtsBTVzIk9c",
             authDomain: "meetapp-52325.firebaseapp.com",
@@ -48,7 +48,6 @@
 
         const { useState, useEffect, useRef } = React;
 
-        // --- カスタムSVGアイコン (エラー防止のための完全な組み込み) ---
         const createIcon = (paths) => ({ size = 24, className = "", title }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
                 {title && <title>{title}</title>}
@@ -72,11 +71,31 @@
         const AlertCircle = createIcon(<React.Fragment><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></React.Fragment>);
 
         // --- CallUI (通話画面) ---
-        const CallUI = ({ localStream, isAudioEnabled, isVideoEnabled, isScreenSharing, toggleAudio, toggleVideo, toggleScreenShare, endCall, userName }) => {
+        const CallUI = ({ localStream, remoteStream, isAudioEnabled, isVideoEnabled, isScreenSharing, toggleAudio, toggleVideo, toggleScreenShare, endCall, userName }) => {
             return (
                 <div className="flex-1 flex flex-col bg-slate-900 relative">
-                    <div className="flex-1 p-4 md:p-8 flex items-center justify-center relative overflow-hidden">
-                        <div className="video-container w-full max-w-5xl aspect-video bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 relative group">
+                    <div className="flex-1 p-4 md:p-8 flex flex-col md:flex-row items-center justify-center gap-4 relative overflow-hidden">
+                        
+                        {/* リモートビデオ (相手の映像) */}
+                        <div className="video-container flex-1 w-full max-w-4xl aspect-video bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 relative group flex items-center justify-center">
+                            <video 
+                                ref={(el) => { if (el && remoteStream) el.srcObject = remoteStream; }}
+                                autoPlay playsInline 
+                                className="w-full h-full object-cover bg-slate-900 absolute inset-0"
+                            />
+                            {!remoteStream?.active && (
+                                <div className="absolute inset-0 flex flex-col gap-3 items-center justify-center bg-slate-800/80 z-10">
+                                    <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                    <span className="text-slate-300 font-medium">相手の参加を待機中...</span>
+                                </div>
+                            )}
+                            <div className="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 border border-slate-700/50 shadow-lg z-20">
+                                <span className="text-sm font-medium">通話相手</span>
+                            </div>
+                        </div>
+
+                        {/* ローカルビデオ (自分の映像 - 右下に小さく表示) */}
+                        <div className="video-container w-40 md:w-64 aspect-video bg-slate-950 rounded-xl overflow-hidden shadow-2xl border border-slate-700 relative md:absolute md:bottom-28 md:right-8 z-30 group">
                             {isVideoEnabled ? (
                                 <video 
                                     ref={(el) => { if (el && localStream) el.srcObject = localStream; }}
@@ -84,25 +103,18 @@
                                     className={`w-full h-full object-cover transition-transform duration-300 ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`}
                                 />
                             ) : (
-                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-4 bg-slate-800/50">
-                                    <div className="w-24 h-24 rounded-full bg-slate-800 flex items-center justify-center shadow-inner">
-                                        <UserIcon size={48} className="text-slate-600" />
-                                    </div>
-                                    <span className="text-lg font-medium">カメラはオフです</span>
+                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 bg-slate-800 gap-2">
+                                    <UserIcon size={24} className="text-slate-600" />
+                                    <span className="text-xs font-medium">カメラオフ</span>
                                 </div>
                             )}
                             
-                            <div className="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 border border-slate-700/50 shadow-lg">
-                                <div className={`w-2.5 h-2.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.5)] ${isAudioEnabled ? 'bg-green-500 shadow-green-500/50' : 'bg-rose-500 shadow-rose-500/50'}`}></div>
-                                <span className="text-sm font-medium">{userName} {isScreenSharing && '(画面共有中)'}</span>
+                            <div className="absolute bottom-2 left-2 bg-slate-900/80 backdrop-blur-md px-2 py-1.5 rounded flex items-center gap-1.5 border border-slate-700/50">
+                                <div className={`w-2 h-2 rounded-full ${isAudioEnabled ? 'bg-green-500' : 'bg-rose-500'}`}></div>
+                                <span className="text-xs font-medium text-white truncate max-w-[80px]">あなた</span>
                             </div>
-
-                            {!isAudioEnabled && (
-                                <div className="absolute top-4 right-4 bg-rose-500/90 text-white p-2 rounded-full backdrop-blur-md shadow-lg">
-                                    <MicOff size={20} />
-                                </div>
-                            )}
                         </div>
+
                     </div>
 
                     <div className="h-24 bg-slate-950 border-t border-slate-800 flex items-center justify-center gap-4 md:gap-6 px-4 pb-4">
@@ -136,19 +148,15 @@
                 messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
             }, [messages]);
 
-            // Firebase Firestoreからリアルタイムでメッセージを取得する
             useEffect(() => {
-                if (!user) return; // 認証されるまで待機
+                if (!user) return; 
 
                 const q = query(collection(db, 'channels', activeChat.id, 'messages'));
-                
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const msgs = [];
                     snapshot.forEach((doc) => {
                         msgs.push({ id: doc.id, ...doc.data() });
                     });
-                    
-                    // 時間順に並び替え
                     msgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
                     setMessages(msgs);
                 }, (error) => {
@@ -172,7 +180,6 @@
                 setInputText("");
 
                 try {
-                    // Firebase Firestoreに保存
                     await addDoc(collection(db, 'channels', activeChat.id, 'messages'), newMsg);
                 } catch (error) {
                     console.error("Error adding message:", error);
@@ -228,29 +235,23 @@
             const [user, setUser] = useState(null);
             const [userName, setUserName] = useState("");
 
-            // Firebaseの匿名認証 (セキュリティ設定対策)
             useEffect(() => {
                 const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
                     setUser(currentUser);
                 });
                 signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
-                
                 return () => unsubscribe();
             }, []);
 
             const [activeChat, setActiveChat] = useState({ type: 'channel', id: 'general', name: '雑談' });
-            
-            // チャンネルリスト（雑談と休憩のみ）
-            const channels = [
-                { id: 'general', name: '雑談' },
-                { id: 'break', name: '休憩' }
-            ];
-
-            // DMのリスト（ダミーデータを完全に削除。機能の枠組みだけ残しています）
+            const channels = [{ id: 'general', name: '雑談' }, { id: 'break', name: '休憩' }];
             const [dms, setDms] = useState([]);
 
             const [callState, setCallState] = useState({ mode: 'none' }); 
             const [localStream, setLocalStream] = useState(null);
+            const [remoteStream, setRemoteStream] = useState(null); // 相手のストリーム
+            const [currentCallId, setCurrentCallId] = useState(null);
+            const pcRef = useRef(null);
             
             const [isAudioEnabled, setIsAudioEnabled] = useState(true);
             const [isVideoEnabled, setIsVideoEnabled] = useState(true);
@@ -264,6 +265,7 @@
                 }
             }, [errorMsg]);
 
+            // --- WebRTCを用いた通話開始処理 ---
             const startCall = async () => {
                 try {
                     setErrorMsg("");
@@ -272,20 +274,128 @@
                     setIsVideoEnabled(true);
                     setIsAudioEnabled(true);
                     setIsScreenSharing(false);
+                    
+                    // WebRTC PeerConnectionの初期化
+                    const pc = new RTCPeerConnection({
+                        iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }]
+                    });
+                    pcRef.current = pc;
+
+                    // リモートストリーム用の受け皿を作成
+                    const remote = new MediaStream();
+                    setRemoteStream(remote);
+
+                    // 自分の映像・音声を接続に追加
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+                    // 相手からのトラックを受信した時の処理
+                    pc.ontrack = event => {
+                        event.streams[0].getTracks().forEach(track => {
+                            remote.addTrack(track);
+                        });
+                    };
+
+                    // Firestoreを使ったシグナリング（接続情報のやり取り）
+                    const channelDoc = doc(db, 'channels', activeChat.id);
+                    const channelData = (await getDoc(channelDoc)).data();
+                    let callId = channelData?.activeCallId;
+
+                    if (!callId) {
+                        // 【発信者】 誰も通話していないので、新しい通話ルームを作る
+                        const newCallDoc = doc(collection(db, 'calls'));
+                        callId = newCallDoc.id;
+                        setCurrentCallId(callId);
+                        await setDoc(channelDoc, { activeCallId: callId }, { merge: true });
+
+                        const offerCandidates = collection(newCallDoc, 'offerCandidates');
+                        const answerCandidates = collection(newCallDoc, 'answerCandidates');
+
+                        pc.onicecandidate = event => {
+                            if (event.candidate) addDoc(offerCandidates, event.candidate.toJSON());
+                        };
+
+                        const offerDescription = await pc.createOffer();
+                        await pc.setLocalDescription(offerDescription);
+                        await setDoc(newCallDoc, { offer: { sdp: offerDescription.sdp, type: offerDescription.type } });
+
+                        // 相手(Answer)を待つ
+                        onSnapshot(newCallDoc, snapshot => {
+                            const data = snapshot.data();
+                            if (!pc.currentRemoteDescription && data?.answer) {
+                                const answerDescription = new RTCSessionDescription(data.answer);
+                                pc.setRemoteDescription(answerDescription);
+                            }
+                        });
+
+                        // 相手の通信経路候補を待つ
+                        onSnapshot(answerCandidates, snapshot => {
+                            snapshot.docChanges().forEach(change => {
+                                if (change.type === 'added') {
+                                    const candidate = new RTCIceCandidate(change.doc.data());
+                                    pc.addIceCandidate(candidate);
+                                }
+                            });
+                        });
+                    } else {
+                        // 【受信者】 すでに通話があるので参加する
+                        setCurrentCallId(callId);
+                        const callDoc = doc(db, 'calls', callId);
+                        const offerCandidates = collection(callDoc, 'offerCandidates');
+                        const answerCandidates = collection(callDoc, 'answerCandidates');
+
+                        pc.onicecandidate = event => {
+                            if (event.candidate) addDoc(answerCandidates, event.candidate.toJSON());
+                        };
+
+                        const callData = (await getDoc(callDoc)).data();
+                        await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+
+                        const answerDescription = await pc.createAnswer();
+                        await pc.setLocalDescription(answerDescription);
+                        await updateDoc(callDoc, { answer: { sdp: answerDescription.sdp, type: answerDescription.type } });
+
+                        // 発信者の通信経路候補を待つ
+                        onSnapshot(offerCandidates, snapshot => {
+                            snapshot.docChanges().forEach(change => {
+                                if (change.type === 'added') {
+                                    const candidate = new RTCIceCandidate(change.doc.data());
+                                    pc.addIceCandidate(candidate);
+                                }
+                            });
+                        });
+                    }
+
                     setCallState({ mode: 'active' });
                 } catch (err) {
-                    console.error("Camera access error:", err);
-                    setErrorMsg("カメラまたはマイクへのアクセスが拒否されました。ブラウザの設定で許可してください。");
+                    console.error("Call error:", err);
+                    setErrorMsg("通話の開始に失敗しました。カメラの許可を確認してください。");
                 }
             };
 
-            const endCall = () => {
+            const endCall = async () => {
+                if (pcRef.current) {
+                    pcRef.current.close();
+                    pcRef.current = null;
+                }
                 if (localStream) {
                     localStream.getTracks().forEach(track => track.stop());
                 }
                 setLocalStream(null);
+                setRemoteStream(null);
                 setCallState({ mode: 'none' });
                 setIsScreenSharing(false);
+
+                // 自分が通話のホスト（発信者）だった場合、通話ルーム状態をリセット
+                try {
+                    const channelDoc = doc(db, 'channels', activeChat.id);
+                    const channelData = (await getDoc(channelDoc)).data();
+                    if (channelData?.activeCallId === currentCallId) {
+                        await setDoc(channelDoc, { activeCallId: null }, { merge: true });
+                    }
+                } catch (e) {
+                    console.error(e);
+                }
+                setCurrentCallId(null);
             };
 
             const toggleAudio = () => {
@@ -307,8 +417,15 @@
                     const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
                     const camTrack = camStream.getVideoTracks()[0];
                     setLocalStream(prevStream => {
-                        if (!prevStream) return camStream;
-                        return new MediaStream([camTrack, ...prevStream.getAudioTracks()]);
+                        const audioTracks = prevStream ? prevStream.getAudioTracks() : [];
+                        const newStream = new MediaStream([camTrack, ...audioTracks]);
+                        
+                        // 相手に送る映像もカメラに戻す
+                        if (pcRef.current) {
+                            const sender = pcRef.current.getSenders().find(s => s.track.kind === 'video');
+                            if (sender) sender.replaceTrack(camTrack);
+                        }
+                        return newStream;
                     });
                     setIsScreenSharing(false);
                     setIsVideoEnabled(true);
@@ -327,12 +444,18 @@
                         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
                         const screenTrack = screenStream.getVideoTracks()[0];
                         localStream?.getVideoTracks().forEach(track => track.stop());
-                        setLocalStream(prevStream => {
-                            const audioTracks = prevStream ? prevStream.getAudioTracks() : [];
-                            return new MediaStream([screenTrack, ...audioTracks]);
-                        });
+                        
+                        const newStream = new MediaStream([screenTrack, ...(localStream ? localStream.getAudioTracks() : [])]);
+                        setLocalStream(newStream);
                         setIsScreenSharing(true);
                         setIsVideoEnabled(true);
+
+                        // 相手に送る映像を画面共有に切り替える
+                        if (pcRef.current) {
+                            const sender = pcRef.current.getSenders().find(s => s.track.kind === 'video');
+                            if (sender) sender.replaceTrack(screenTrack);
+                        }
+                        
                         screenTrack.onended = () => restoreCamera();
                     } catch (err) {
                         console.error("Screen share error", err);
@@ -340,7 +463,6 @@
                 }
             };
 
-            // 名前が未設定の場合は、名前入力画面を表示
             if (!userName) {
                 return (
                     <div className="flex items-center justify-center h-screen bg-slate-900 text-slate-200 font-sans">
@@ -457,7 +579,7 @@
 
                         {callState.mode === 'active' ? (
                             <CallUI 
-                                localStream={localStream} isAudioEnabled={isAudioEnabled} isVideoEnabled={isVideoEnabled} isScreenSharing={isScreenSharing}
+                                localStream={localStream} remoteStream={remoteStream} isAudioEnabled={isAudioEnabled} isVideoEnabled={isVideoEnabled} isScreenSharing={isScreenSharing}
                                 toggleAudio={toggleAudio} toggleVideo={toggleVideo} toggleScreenShare={toggleScreenShare} endCall={endCall}
                                 userName={userName}
                             />
