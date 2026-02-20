@@ -1,753 +1,443 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Modern Chat App with Group WebRTC</title>
-  
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <script type="importmap">
-    {
-      "imports": {
-        "react": "https://esm.sh/react@18.2.0",
-        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-        "lucide-react": "https://esm.sh/lucide-react@0.292.0",
-        "firebase/app": "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js",
-        "firebase/auth": "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js",
-        "firebase/firestore": "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"
-      }
-    }
-  </script>
-  
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <style>
-    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: rgba(148, 163, 184, 0.3); border-radius: 20px; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat & Call App with Screen Share</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        
+        /* ビデオのフェードインアニメーション */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .video-container { animation: fadeIn 0.3s ease-out forwards; }
+    </style>
 </head>
-<body class="bg-[#F8FAFC]">
-  
-  <div id="root"></div>
+<body class="bg-slate-900 text-slate-200 overflow-hidden">
+    <div id="root" class="h-screen w-screen"></div>
 
-  <script type="text/babel" data-type="module">
-    import React, { useState, useEffect, useRef } from 'react';
-    import { createRoot } from 'react-dom/client';
-    import { Send, MessageSquare, User, Users, Menu, X, Settings, Image as ImageIcon, Phone, Video, Hash, PhoneCall, PhoneOff, Mic, MicOff, Camera, CameraOff, MonitorUp } from 'lucide-react';
-    import { initializeApp } from 'firebase/app';
-    import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-    import { getFirestore, collection, addDoc, onSnapshot, doc, setDoc, getDoc, deleteDoc, getDocs } from 'firebase/firestore';
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-    // --- Firebase 設定 ---
-    const firebaseConfig = {
-      apiKey: "AIzaSyDqbtZUCkdO4p7nCFBPEVO4XtsBTVzIk9c",
-      authDomain: "meetapp-52325.firebaseapp.com",
-      projectId: "meetapp-52325",
-      storageBucket: "meetapp-52325.firebasestorage.app",
-      messagingSenderId: "623449233232",
-      appId: "1:623449233232:web:f25c2a8641c135b509be55"
-    };
-    
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
-    const appId = 'my-chat-app';
-
-    const rtcServers = { iceServers: [{ urls: ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] };
-
-    const CHANNELS = [
-      { id: 'c1', name: '雑談', description: 'みんなで楽しくおしゃべり' },
-      { id: 'c2', name: '休憩', description: 'ちょっと一息、リラックスルーム' },
-    ];
-
-    // 再利用可能なアバターコンポーネント
-    const UserAvatar = ({ user, size = 'w-8 h-8', textClass = 'text-xs' }) => {
-      if (!user) return <div className={`${size} rounded-full bg-slate-200`}></div>;
-      if (user.avatarBase64) {
-        return <img src={user.avatarBase64} alt={user.name} className={`${size} rounded-full object-cover shadow-sm`} />;
-      }
-      return <div className={`${size} rounded-full flex-shrink-0 flex items-center justify-center text-white font-bold ${textClass} ${user.avatar || 'bg-indigo-500'} shadow-sm`}>{user.name?.[0]}</div>;
-    };
-
-    // リモートビデオ再生用コンポーネント
-    const RemoteVideoPlayer = ({ stream, uid, usersList }) => {
-      const videoRef = useRef(null);
-      const user = usersList.find(u => u.uid === uid) || { name: 'Unknown' };
-
-      useEffect(() => {
-        if (videoRef.current && stream) videoRef.current.srcObject = stream;
-      }, [stream]);
-
-      return (
-        <div className="relative bg-slate-800 rounded-xl overflow-hidden aspect-video shadow-lg border border-slate-700/50">
-          <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-          <div className="absolute bottom-2 left-2 bg-slate-900/70 backdrop-blur-sm text-white text-xs px-2.5 py-1 rounded-md flex items-center gap-1.5">
-            <UserAvatar user={user} size="w-4 h-4" textClass="text-[8px]" />
-            {user.name}
-          </div>
-        </div>
-      );
-    };
-
-    function App() {
-      const [authUser, setAuthUser] = useState(null);
-      const [userProfile, setUserProfile] = useState(null);
-      const [showSettings, setShowSettings] = useState(false);
-      
-      const [activeChat, setActiveChat] = useState({ type: 'channel', data: CHANNELS[0] });
-      const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-      const [inputText, setInputText] = useState('');
-      const [usersList, setUsersList] = useState([]);
-      const [messages, setMessages] = useState([]);
-
-      // --- WebRTC 統合状態 ---
-      const [localStream, setLocalStream] = useState(null);
-      const [remoteStreams, setRemoteStreams] = useState({}); // { uid: MediaStream }
-      const [callState, setCallState] = useState({
-        mode: 'none',     // 'none', 'dm', 'channel'
-        status: 'idle',   // dm: 'idle', 'calling', 'ringing', 'connected'. channel: 'connected'
-        incomingCall: null,
-        activeId: null    // DMならpeerUid, ChannelならroomId
-      });
-      const [currentDMCallDocId, setCurrentDMCallDocId] = useState(null);
-      
-      const [isVideoEnabled, setIsVideoEnabled] = useState(true);
-      const [isAudioEnabled, setIsAudioEnabled] = useState(true);
-      const [isScreenSharing, setIsScreenSharing] = useState(false);
-
-      const peersRef = useRef({}); // { [uid]: RTCPeerConnection }
-      const localStreamRef = useRef(null);
-      const localVideoRef = useRef(null);
-      const originalVideoTrackRef = useRef(null);
-      const callListenersRef = useRef([]); 
-      const messagesEndRef = useRef(null);
-
-      const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      useEffect(() => scrollToBottom(), [messages]);
-
-      // --- 1. 初期化と認証 ---
-      useEffect(() => {
-        const initAuth = async () => { await signInAnonymously(auth).catch(console.error); };
-        initAuth();
-
-        const unsub = onAuthStateChanged(auth, async (user) => {
-          setAuthUser(user);
-          if (user) {
-            const docSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid));
-            if (docSnap.exists()) setUserProfile(docSnap.data());
-          }
-        });
-        return () => unsub();
-      }, []);
-
-      // --- 2. データ購読 ---
-      useEffect(() => {
-        if (!userProfile) return;
-        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'users'), (snap) => {
-          const list = [];
-          snap.forEach(d => { if (d.id !== userProfile.uid) list.push({ uid: d.id, ...d.data() }); });
-          setUsersList(list);
-        });
-        return () => unsub();
-      }, [userProfile]);
-
-      useEffect(() => {
-        if (!userProfile || !activeChat) return;
-        const colName = activeChat.type === 'channel' ? `messages_${activeChat.data.id}` : `dm_${[userProfile.uid, activeChat.data.uid].sort().join('_')}`;
-        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', colName), (snap) => {
-          const msgs = [];
-          snap.forEach(d => msgs.push({ id: d.id, ...d.data() }));
-          setMessages(msgs.sort((a, b) => a.timestamp - b.timestamp));
-        });
-        return () => unsub();
-      }, [activeChat, userProfile]);
-
-      // アバター画像変更処理
-      const handleAvatarChange = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = new Image();
-          img.onload = async () => {
-            const canvas = document.createElement('canvas');
-            const MAX = 150;
-            let w = img.width, h = img.height;
-            if (w > h) { if (w > MAX) { h *= MAX/w; w = MAX; } }
-            else { if (h > MAX) { w *= MAX/h; h = MAX; } }
-            canvas.width = w; canvas.height = h;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, w, h);
-            const b64 = canvas.toDataURL('image/jpeg', 0.8);
-            
-            const updatedProfile = { ...userProfile, avatarBase64: b64 };
-            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', userProfile.uid), updatedProfile);
-            setUserProfile(updatedProfile);
-            setShowSettings(false);
-          };
-          img.src = event.target.result;
-        };
-        reader.readAsDataURL(file);
-      };
-
-      // --- 3. WebRTC共通機能 ---
-      const updateLocalStream = (stream) => {
-        setLocalStream(stream);
-        localStreamRef.current = stream;
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-      };
-
-      const cleanupCallLocally = () => {
-        if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
-        if (originalVideoTrackRef.current) originalVideoTrackRef.current.stop();
-        updateLocalStream(null);
-        Object.values(peersRef.current).forEach(pc => pc && pc.close());
-        peersRef.current = {};
-        setRemoteStreams({});
-        setCallState({ mode: 'none', status: 'idle', incomingCall: null, activeId: null });
-        setCurrentDMCallDocId(null);
-        setIsScreenSharing(false);
-        callListenersRef.current.forEach(unsub => unsub());
-        callListenersRef.current = [];
-      };
-
-      const toggleAudio = () => {
-        const track = localStreamRef.current?.getAudioTracks()[0];
-        if (track) { track.enabled = !track.enabled; setIsAudioEnabled(track.enabled); }
-      };
-      
-      const toggleVideo = () => {
-        const track = localStreamRef.current?.getVideoTracks()[0];
-        if (track) { track.enabled = !track.enabled; setIsVideoEnabled(track.enabled); }
-      };
-
-      // --- 画面共有機能 ---
-      const stopScreenShare = async () => {
-        setIsScreenSharing(false);
-        const currentVideoTrack = localStreamRef.current?.getVideoTracks()[0];
-        if (currentVideoTrack) {
-          currentVideoTrack.stop();
-          localStreamRef.current.removeTrack(currentVideoTrack);
-        }
-
-        let camTrack = originalVideoTrackRef.current;
-        if (!camTrack || camTrack.readyState === 'ended') {
-          try {
-            const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
-            camTrack = camStream.getVideoTracks()[0];
-          } catch(e) { console.warn("Camera fallback failed", e); }
-        }
-
-        if (camTrack) {
-          localStreamRef.current.addTrack(camTrack);
-          setIsVideoEnabled(camTrack.enabled);
-          if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-          
-          Object.values(peersRef.current).forEach(pc => {
-            const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) sender.replaceTrack(camTrack);
-          });
-        }
-      };
-
-      const startScreenShare = async () => {
-        try {
-          const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-          const screenTrack = screenStream.getVideoTracks()[0];
-
-          const currentVideoTrack = localStreamRef.current?.getVideoTracks()[0];
-          if (currentVideoTrack) {
-            originalVideoTrackRef.current = currentVideoTrack;
-            localStreamRef.current.removeTrack(currentVideoTrack);
-          }
-          localStreamRef.current.addTrack(screenTrack);
-          setIsScreenSharing(true);
-          setIsVideoEnabled(true);
-
-          if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-
-          Object.values(peersRef.current).forEach(pc => {
-            const sender = pc.getSenders().find(s => s.track?.kind === 'video');
-            if (sender) sender.replaceTrack(screenTrack);
-          });
-
-          // ブラウザのUIで「共有を停止」が押された時の処理
-          screenTrack.onended = () => stopScreenShare();
-        } catch (err) { console.error("Screen share failed", err); }
-      };
-
-      const toggleScreenShare = () => {
-        if (isScreenSharing) stopScreenShare();
-        else startScreenShare();
-      };
-
-      // ==========================================
-      // [A] グループ通話 (Channel) のロジック
-      // ==========================================
-      const joinChannelCall = async (roomId, isVideo) => {
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
-          updateLocalStream(stream);
-          setIsVideoEnabled(isVideo);
-          setIsAudioEnabled(true);
-          setCallState({ mode: 'channel', status: 'connected', activeId: roomId, incomingCall: null });
-
-          // 自分を参加者リストに追加
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', `room_participants_${roomId}`, userProfile.uid), { joinedAt: Date.now() });
-
-          // 既存の参加者にOfferを送信
-          const snap = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', `room_participants_${roomId}`));
-          snap.forEach(docSnap => {
-            const peerUid = docSnap.id;
-            if (peerUid !== userProfile.uid) createChannelPeerConnection(peerUid, roomId, stream, true);
-          });
-        } catch(err) {
-          console.error(err);
-          alert("カメラ・マイクへのアクセスに失敗しました。");
-        }
-      };
-
-      const createChannelPeerConnection = async (peerUid, roomId, stream, isInitiator) => {
-        const pc = new RTCPeerConnection(rtcServers);
-        peersRef.current[peerUid] = pc;
-        stream.getTracks().forEach(t => pc.addTrack(t, stream));
-
-        pc.ontrack = (e) => setRemoteStreams(prev => ({ ...prev, [peerUid]: e.streams[0] }));
-
-        pc.onicecandidate = (e) => {
-          if (e.candidate) {
-            addDoc(collection(db, 'artifacts', appId, 'public', 'data', `room_signals_${roomId}_${peerUid}`), {
-              from: userProfile.uid, type: 'candidate', candidate: e.candidate.toJSON(), timestamp: Date.now()
-            });
-          }
+        // いただいたFirebase設定をここで初期化
+        const firebaseConfig = {
+            apiKey: "AIzaSyDqbtZUCkdO4p7nCFBPEVO4XtsBTVzIk9c",
+            authDomain: "meetapp-52325.firebaseapp.com",
+            projectId: "meetapp-52325",
+            storageBucket: "meetapp-52325.firebasestorage.app",
+            messagingSenderId: "623449233232",
+            appId: "1:623449233232:web:f25c2a8641c135b509be55",
+            measurementId: "G-XMXN52QVWK"
         };
 
-        if (isInitiator) {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          addDoc(collection(db, 'artifacts', appId, 'public', 'data', `room_signals_${roomId}_${peerUid}`), {
-            from: userProfile.uid, type: 'offer', sdp: { type: offer.type, sdp: offer.sdp }, timestamp: Date.now()
-          });
-        }
-        return pc;
-      };
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
 
-      // チャンネル用シグナリング＆参加者監視
-      useEffect(() => {
-        if (callState.mode !== 'channel' || !callState.activeId || !userProfile) return;
-        const roomId = callState.activeId;
-        
-        // 自分宛てのシグナルを監視
-        const unsubSignals = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `room_signals_${roomId}_${userProfile.uid}`), (snap) => {
-          snap.docChanges().forEach(async (change) => {
-            if (change.type === 'added') {
-              const { from, type, sdp, candidate } = change.doc.data();
-              let pc = peersRef.current[from];
+        const { useState, useEffect, useRef } = React;
 
-              if (type === 'offer') {
-                if (!pc) pc = await createChannelPeerConnection(from, roomId, localStreamRef.current, false);
-                await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                addDoc(collection(db, 'artifacts', appId, 'public', 'data', `room_signals_${roomId}_${from}`), {
-                  from: userProfile.uid, type: 'answer', sdp: { type: answer.type, sdp: answer.sdp }, timestamp: Date.now()
-                });
-              } else if (type === 'answer' && pc && !pc.currentRemoteDescription) {
-                await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-              } else if (type === 'candidate' && pc) {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-              }
-              deleteDoc(change.doc.ref).catch(console.error); // 処理済みシグナル削除
-            }
-          });
-        });
-
-        // 参加者の離脱監視
-        const unsubParticipants = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `room_participants_${roomId}`), (snap) => {
-          snap.docChanges().forEach(change => {
-            if (change.type === 'removed') {
-              const peerUid = change.doc.id;
-              if (peersRef.current[peerUid]) { peersRef.current[peerUid].close(); delete peersRef.current[peerUid]; }
-              setRemoteStreams(prev => { const next = { ...prev }; delete next[peerUid]; return next; });
-            }
-          });
-        });
-
-        return () => { unsubSignals(); unsubParticipants(); };
-      }, [callState.mode, callState.activeId, userProfile]);
-
-      const leaveChannelCall = async () => {
-        if (callState.mode === 'channel' && callState.activeId) {
-          await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', `room_participants_${callState.activeId}`, userProfile.uid)).catch(console.error);
-        }
-        cleanupCallLocally();
-      };
-
-
-      // ==========================================
-      // [B] 1対1 (DM) 通話 のロジック
-      // ==========================================
-      useEffect(() => {
-        if (!userProfile) return;
-        const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'calls'), (snap) => {
-          snap.docChanges().forEach((change) => {
-            const data = change.doc.data();
-            // 着信
-            if (change.type === 'added' && data.calleeUid === userProfile.uid && data.status === 'calling' && callState.mode === 'none') {
-              setCallState(prev => ({ ...prev, status: 'ringing', incomingCall: { id: change.doc.id, ...data } }));
-            }
-            // 終了
-            if (data.status === 'ended' && (data.callerUid === userProfile.uid || data.calleeUid === userProfile.uid)) {
-              cleanupCallLocally();
-            }
-            // 応答 (発信者側)
-            if (data.callerUid === userProfile.uid && data.status === 'connected' && data.answer) {
-              const peerUid = data.calleeUid;
-              const pc = peersRef.current[peerUid];
-              if (pc && !pc.currentRemoteDescription) {
-                pc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(console.error);
-                setCallState(prev => ({ ...prev, status: 'connected' }));
-              }
-            }
-          });
-        });
-        return () => unsub();
-      }, [userProfile, callState.mode]);
-
-      const startDMCall = async (isVideo) => {
-        if (activeChat.type !== 'dm') return;
-        const peerUid = activeChat.data.uid;
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
-          updateLocalStream(stream);
-          setIsVideoEnabled(isVideo); setIsAudioEnabled(true);
-          setCallState({ mode: 'dm', status: 'calling', activeId: peerUid, incomingCall: null });
-
-          const pc = new RTCPeerConnection(rtcServers);
-          peersRef.current[peerUid] = pc;
-          stream.getTracks().forEach(t => pc.addTrack(t, stream));
-          pc.ontrack = e => setRemoteStreams({ [peerUid]: e.streams[0] });
-
-          const callDoc = doc(collection(db, 'artifacts', appId, 'public', 'data', 'calls'));
-          setCurrentDMCallDocId(callDoc.id);
-
-          pc.onicecandidate = e => {
-            if (e.candidate) addDoc(collection(db, 'artifacts', appId, 'public', 'data', `candidates_${callDoc.id}_offer`), e.candidate.toJSON());
-          };
-
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-
-          await setDoc(callDoc, { callerUid: userProfile.uid, callerName: userProfile.name, calleeUid: peerUid, offer: { sdp: offer.sdp, type: offer.type }, status: 'calling', timestamp: Date.now() });
-
-          const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `candidates_${callDoc.id}_answer`), (snap) => {
-            snap.docChanges().forEach(change => { if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data())); });
-          });
-          callListenersRef.current.push(unsub);
-        } catch (err) { console.error(err); cleanupCallLocally(); }
-      };
-
-      const answerDMCall = async (isVideo) => {
-        const { incomingCall } = callState;
-        if (!incomingCall) return;
-        const callId = incomingCall.id;
-        const peerUid = incomingCall.callerUid;
-        
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
-          updateLocalStream(stream);
-          setIsVideoEnabled(isVideo); setIsAudioEnabled(true);
-          setCallState({ mode: 'dm', status: 'connected', activeId: peerUid, incomingCall: null });
-          setCurrentDMCallDocId(callId);
-
-          const pc = new RTCPeerConnection(rtcServers);
-          peersRef.current[peerUid] = pc;
-          stream.getTracks().forEach(t => pc.addTrack(t, stream));
-          pc.ontrack = e => setRemoteStreams({ [peerUid]: e.streams[0] });
-
-          pc.onicecandidate = e => {
-            if (e.candidate) addDoc(collection(db, 'artifacts', appId, 'public', 'data', `candidates_${callId}_answer`), e.candidate.toJSON());
-          };
-
-          await pc.setRemoteDescription(new RTCSessionDescription(incomingCall.offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-
-          await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp }, status: 'connected' }, { merge: true });
-
-          const unsub = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', `candidates_${callId}_offer`), (snap) => {
-            snap.docChanges().forEach(change => { if (change.type === 'added') pc.addIceCandidate(new RTCIceCandidate(change.doc.data())); });
-          });
-          callListenersRef.current.push(unsub);
-        } catch (err) { console.error(err); handleHangupDM(); }
-      };
-
-      const handleHangupDM = async () => {
-        const callId = currentDMCallDocId || callState.incomingCall?.id;
-        cleanupCallLocally();
-        if (callId) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'calls', callId), { status: 'ended' }, { merge: true }).catch(console.error);
-      };
-
-
-      // --- 基本アクション ---
-      const handleLogin = async (username) => {
-        if (!username.trim() || !authUser) return;
-        const colors = ['bg-violet-600', 'bg-emerald-500', 'bg-blue-500', 'bg-rose-500', 'bg-amber-500'];
-        const profile = { uid: authUser.uid, name: username, avatar: colors[Math.floor(Math.random() * colors.length)], isOnline: true, joinedAt: Date.now() };
-        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', authUser.uid), profile);
-        setUserProfile(profile);
-      };
-
-      const handleSendMessage = async (e) => {
-        e.preventDefault();
-        if (!inputText.trim() || !userProfile) return;
-        const colName = activeChat.type === 'channel' ? `messages_${activeChat.data.id}` : `dm_${[userProfile.uid, activeChat.data.uid].sort().join('_')}`;
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', colName), {
-          text: inputText, sender: userProfile.name, senderUid: userProfile.uid, timestamp: Date.now()
-        });
-        setInputText('');
-      };
-
-
-      // ==========================================
-      // UI レンダリング
-      // ==========================================
-
-      if (!userProfile) {
-        return (
-          <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-            <div className="bg-white border p-8 rounded-3xl w-full max-w-sm shadow-2xl">
-              <h1 className="text-2xl font-black text-slate-800 text-center mb-6">Welcome to Chat</h1>
-              <form onSubmit={e => { e.preventDefault(); handleLogin(e.target.username.value); }} className="space-y-4">
-                <input type="text" name="username" disabled={!authUser} className="w-full px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 outline-none focus:border-indigo-500" placeholder="ニックネーム" required autoFocus />
-                <button type="submit" disabled={!authUser} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-colors">参加する</button>
-              </form>
-            </div>
-          </div>
+        // --- カスタムSVGアイコン (エラー防止のための完全な組み込み) ---
+        const createIcon = (paths) => ({ size = 24, className = "", title }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                {title && <title>{title}</title>}
+                {paths}
+            </svg>
         );
-      }
 
-      return (
-        <div className="flex h-screen w-full relative overflow-hidden">
-          
-          {/* プロフィール設定モーダル */}
-          {showSettings && (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-              <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl relative">
-                <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-700"><X size={24}/></button>
-                <h3 className="text-xl font-bold mb-6 text-slate-800 text-center">プロフィール設定</h3>
-                <div className="flex flex-col items-center gap-6 mb-8">
-                  <div className="relative group cursor-pointer">
-                    <UserAvatar user={userProfile} size="w-28 h-28" textClass="text-4xl" />
-                    <label className="absolute inset-0 bg-black/50 rounded-full flex flex-col items-center justify-center text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                      <ImageIcon size={24} className="mb-1" />
-                      <span className="text-xs font-bold">変更</span>
-                      <input type="file" accept="image/*" className="hidden" onChange={handleAvatarChange} />
-                    </label>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xl font-bold text-slate-800">{userProfile.name}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+        const Mic = createIcon(<React.Fragment><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" /></React.Fragment>);
+        const MicOff = createIcon(<React.Fragment><line x1="2" y1="2" x2="22" y2="22" /><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2" /><path d="M5 10v2a7 7 0 0 0 12 5" /><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33" /><path d="M9 9v3a3 3 0 0 0 5.12 2.12" /><line x1="12" y1="19" x2="12" y2="22" /></React.Fragment>);
+        const Camera = createIcon(<React.Fragment><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></React.Fragment>);
+        const CameraOff = createIcon(<React.Fragment><line x1="2" y1="2" x2="22" y2="22" /><path d="M7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16" /><path d="M9.5 4h5L17 7h3a2 2 0 0 1 2 2v7.5" /><path d="M14.121 15.121A3 3 0 1 1 9.88 10.88" /></React.Fragment>);
+        const MonitorUp = createIcon(<React.Fragment><path d="m9 10 3-3 3 3" /><path d="M12 7v8" /><rect width="20" height="14" x="2" y="3" rx="2" /><path d="M12 17v4" /><path d="M8 21h8" /></React.Fragment>);
+        const Phone = createIcon(<React.Fragment><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></React.Fragment>);
+        const PhoneOff = createIcon(<React.Fragment><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" /><line x1="22" y1="2" x2="2" y2="22" /></React.Fragment>);
+        const MessageSquare = createIcon(<React.Fragment><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></React.Fragment>);
+        const Hash = createIcon(<React.Fragment><line x1="4" y1="9" x2="20" y2="9" /><line x1="4" y1="15" x2="20" y2="15" /><line x1="10" y1="3" x2="8" y2="21" /><line x1="16" y1="3" x2="14" y2="21" /></React.Fragment>);
+        const UserIcon = createIcon(<React.Fragment><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></React.Fragment>);
+        const X = createIcon(<React.Fragment><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></React.Fragment>);
+        const Menu = createIcon(<React.Fragment><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="18" x2="20" y2="18" /></React.Fragment>);
+        const Send = createIcon(<React.Fragment><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></React.Fragment>);
+        const AlertCircle = createIcon(<React.Fragment><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></React.Fragment>);
 
-          {/* DM着信オーバーレイ */}
-          {callState.status === 'ringing' && callState.incomingCall && (
-            <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center">
-              <div className="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center w-full max-w-sm mx-4">
-                <div className="animate-bounce mb-4"><UserAvatar user={{name: callState.incomingCall.callerName}} size="w-24 h-24" textClass="text-4xl" /></div>
-                <h2 className="text-2xl font-bold mb-1 text-slate-800">{callState.incomingCall.callerName}</h2>
-                <p className="text-slate-500 mb-8 font-medium">着信中...</p>
-                <div className="flex gap-4 w-full">
-                  <button onClick={handleHangupDM} className="flex-1 py-4 bg-rose-500 hover:bg-rose-600 rounded-2xl text-white transition-all flex justify-center shadow-lg hover:shadow-rose-500/30"><PhoneOff size={28} /></button>
-                  <button onClick={() => answerDMCall(false)} className="flex-1 py-4 bg-indigo-500 hover:bg-indigo-600 rounded-2xl text-white transition-all flex justify-center shadow-lg hover:shadow-indigo-500/30"><PhoneCall size={28} /></button>
-                  <button onClick={() => answerDMCall(true)} className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-600 rounded-2xl text-white transition-all flex justify-center shadow-lg hover:shadow-emerald-500/30"><Video size={28} /></button>
-                </div>
-              </div>
-            </div>
-          )}
+        // --- CallUI (通話画面) ---
+        const CallUI = ({ localStream, isAudioEnabled, isVideoEnabled, isScreenSharing, toggleAudio, toggleVideo, toggleScreenShare, endCall }) => {
+            return (
+                <div className="flex-1 flex flex-col bg-slate-900 relative">
+                    <div className="flex-1 p-4 md:p-8 flex items-center justify-center relative overflow-hidden">
+                        <div className="video-container w-full max-w-5xl aspect-video bg-slate-950 rounded-2xl overflow-hidden shadow-2xl border border-slate-800 relative group">
+                            {isVideoEnabled ? (
+                                <video 
+                                    ref={(el) => { if (el && localStream) el.srcObject = localStream; }}
+                                    autoPlay playsInline muted 
+                                    className={`w-full h-full object-cover transition-transform duration-300 ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`}
+                                />
+                            ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-4 bg-slate-800/50">
+                                    <div className="w-24 h-24 rounded-full bg-slate-800 flex items-center justify-center shadow-inner">
+                                        <UserIcon size={48} className="text-slate-600" />
+                                    </div>
+                                    <span className="text-lg font-medium">カメラはオフです</span>
+                                </div>
+                            )}
+                            
+                            <div className="absolute bottom-4 left-4 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg flex items-center gap-2 border border-slate-700/50 shadow-lg">
+                                <div className={`w-2.5 h-2.5 rounded-full shadow-[0_0_8px_rgba(0,0,0,0.5)] ${isAudioEnabled ? 'bg-green-500 shadow-green-500/50' : 'bg-rose-500 shadow-rose-500/50'}`}></div>
+                                <span className="text-sm font-medium">あなた {isScreenSharing && '(画面共有中)'}</span>
+                            </div>
 
-          {/* DM通話中 フルスクリーンUI */}
-          {callState.mode === 'dm' && callState.status !== 'ringing' && (
-            <div className="fixed inset-0 bg-slate-950 z-[90] flex flex-col">
-              <div className="flex-1 relative overflow-hidden flex items-center justify-center">
-                {remoteStreams[callState.activeId] ? (
-                  <video autoPlay playsInline ref={el => { if(el) el.srcObject = remoteStreams[callState.activeId]; }} className="absolute inset-0 w-full h-full object-cover" />
-                ) : (
-                  <div className="text-center text-white z-10">
-                    <UserAvatar user={activeChat.data} size="w-32 h-32 mx-auto mb-6 animate-pulse" textClass="text-5xl" />
-                    <h2 className="text-3xl font-bold mb-2">{activeChat.data.name}</h2><p className="text-slate-400">発信中...</p>
-                  </div>
-                )}
-                
-                {/* ワイプ */}
-                <div className="absolute bottom-6 right-6 w-32 h-48 sm:w-48 sm:h-72 bg-slate-800 rounded-2xl overflow-hidden shadow-2xl border-2 border-slate-700/50 z-20">
-                  {isVideoEnabled ? (
-                    <video ref={localVideoRef} autoPlay playsInline muted className={`w-full h-full object-cover ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`} />
-                  ) : (<div className="w-full h-full flex items-center justify-center text-slate-500"><CameraOff size={32} /></div>)}
-                </div>
-              </div>
-              <div className="h-28 bg-slate-900/90 backdrop-blur-md flex items-center justify-center gap-6 shrink-0 border-t border-slate-800 pb-4">
-                <button onClick={toggleAudio} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${isAudioEnabled ? 'bg-slate-700 text-white' : 'bg-rose-500/20 text-rose-500'}`}>{isAudioEnabled ? <Mic size={24} /> : <MicOff size={24} />}</button>
-                <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${isVideoEnabled ? 'bg-slate-700 text-white' : 'bg-rose-500/20 text-rose-500'}`}>{isVideoEnabled ? <Camera size={24} /> : <CameraOff size={24} />}</button>
-                <button onClick={toggleScreenShare} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all ${isScreenSharing ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-white'}`}><MonitorUp size={24} /></button>
-                <button onClick={handleHangupDM} className="w-16 h-16 rounded-full flex items-center justify-center bg-rose-500 text-white transition-all hover:scale-105 ml-8"><PhoneOff size={28} /></button>
-              </div>
-            </div>
-          )}
-          
-          {mobileMenuOpen && <div className="fixed inset-0 bg-slate-900/60 z-20 md:hidden" onClick={() => setMobileMenuOpen(false)} />}
-
-          {/* サイドバー */}
-          <div className={`fixed md:relative z-30 w-72 h-full bg-slate-900 flex flex-col transition-transform ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-            <div className="p-5 border-b border-slate-800 flex justify-between items-center">
-              <h2 className="text-xl font-bold text-white flex items-center gap-2"><MessageSquare className="text-indigo-400"/> Connect</h2>
-              <button onClick={() => setMobileMenuOpen(false)} className="md:hidden text-slate-400"><X size={20} /></button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto py-6 custom-scrollbar">
-              <div className="px-5 mb-2 text-xs font-bold text-slate-500 uppercase tracking-wider">Channels</div>
-              {CHANNELS.map(c => (
-                <button key={c.id} onClick={() => { setActiveChat({type: 'channel', data: c}); setMobileMenuOpen(false); }}
-                  className={`w-full text-left px-5 py-2.5 flex items-center gap-3 transition-colors ${activeChat.data.id === c.id ? 'bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500' : 'text-slate-400 hover:bg-slate-800'}`}>
-                  <Hash size={18}/> <span className="font-medium">{c.name}</span>
-                </button>
-              ))}
-
-              <div className="mt-8 px-5 mb-2 text-xs font-bold text-slate-500 uppercase tracking-wider">Direct Messages</div>
-              {usersList.map(u => (
-                <button key={u.uid} onClick={() => { setActiveChat({type: 'dm', data: u}); setMobileMenuOpen(false); }}
-                  className={`w-full text-left px-5 py-2.5 flex items-center gap-3 transition-colors ${activeChat.data?.uid === u.uid ? 'bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500' : 'text-slate-400 hover:bg-slate-800'}`}>
-                  <div className="relative">
-                    <UserAvatar user={u} size="w-7 h-7" />
-                    <div className="absolute bottom-0 right-0 w-2 h-2 bg-emerald-400 border border-slate-900 rounded-full"></div>
-                  </div>
-                  <span className="font-medium truncate">{u.name}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* 自分のプロフィールエリア */}
-            <div className="p-4 bg-slate-800/50 border-t border-slate-800 flex items-center gap-3">
-              <UserAvatar user={userProfile} size="w-10 h-10" />
-              <div className="flex-1 min-w-0 text-white font-bold truncate">{userProfile.name}</div>
-              <button onClick={() => setShowSettings(true)} className="p-2 text-slate-400 hover:text-white transition-colors rounded-lg hover:bg-slate-700">
-                <Settings size={20} />
-              </button>
-            </div>
-          </div>
-
-          {/* チャットエリア */}
-          <div className="flex-1 flex flex-col min-w-0 bg-white">
-            <header className="h-16 bg-white border-b px-4 flex items-center justify-between shrink-0 shadow-sm z-10 relative">
-              <div className="flex items-center gap-3">
-                <button onClick={() => setMobileMenuOpen(true)} className="md:hidden text-slate-500"><Menu size={22} /></button>
-                <div className="flex items-center gap-2">
-                  {activeChat.type === 'channel' ? <Hash className="text-slate-400" size={20}/> : <UserAvatar user={activeChat.data} size="w-6 h-6" />}
-                  <h3 className="font-bold text-lg text-slate-800">{activeChat.data.name}</h3>
-                </div>
-              </div>
-              
-              {/* DM用通話ボタン */}
-              {activeChat.type === 'dm' && callState.mode === 'none' && (
-                <div className="flex gap-2">
-                  <button onClick={() => startDMCall(false)} className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Phone size={20} /></button>
-                  <button onClick={() => startDMCall(true)} className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"><Video size={20} /></button>
-                </div>
-              )}
-            </header>
-
-            {/* Channel グループ通話 UI */}
-            {activeChat.type === 'channel' && (
-              <div className="shrink-0 z-0">
-                {/* 未参加の場合の帯 */}
-                {callState.mode !== 'channel' && (
-                  <div className="bg-indigo-50/50 border-b border-indigo-100 p-3 flex justify-between items-center px-6">
-                    <span className="text-sm text-indigo-800 font-bold flex items-center gap-2"><PhoneCall size={16}/> グループ通話に参加できます</span>
-                    <div className="flex gap-2">
-                      <button onClick={() => joinChannelCall(activeChat.data.id, false)} className="flex items-center gap-1.5 bg-white border shadow-sm px-4 py-1.5 rounded-lg text-sm font-bold text-slate-700 hover:bg-slate-50 transition-colors"><Mic size={16}/> 音声で参加</button>
-                      <button onClick={() => joinChannelCall(activeChat.data.id, true)} className="flex items-center gap-1.5 bg-indigo-500 shadow-sm px-4 py-1.5 rounded-lg text-sm font-bold text-white hover:bg-indigo-600 transition-colors"><Video size={16}/> ビデオで参加</button>
+                            {!isAudioEnabled && (
+                                <div className="absolute top-4 right-4 bg-rose-500/90 text-white p-2 rounded-full backdrop-blur-md shadow-lg">
+                                    <MicOff size={20} />
+                                </div>
+                            )}
+                        </div>
                     </div>
-                  </div>
-                )}
-                
-                {/* 参加中のビデオグリッド */}
-                {callState.mode === 'channel' && callState.activeId === activeChat.data.id && (
-                  <div className="bg-slate-900 p-4 border-b border-slate-800 shadow-inner">
-                    <div className="flex justify-between items-center mb-4 px-2">
-                      <div className="text-white font-bold flex items-center gap-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                        ボイスチャンネル接続中
-                      </div>
-                      <div className="flex gap-3">
-                        <button onClick={toggleAudio} className={`p-2 rounded-lg transition-colors ${isAudioEnabled ? 'bg-slate-700 text-white' : 'bg-rose-500/20 text-rose-500'}`}>{isAudioEnabled ? <Mic size={18}/> : <MicOff size={18}/>}</button>
-                        <button onClick={toggleVideo} className={`p-2 rounded-lg transition-colors ${isVideoEnabled ? 'bg-slate-700 text-white' : 'bg-rose-500/20 text-rose-500'}`}>{isVideoEnabled ? <Camera size={18}/> : <CameraOff size={18}/>}</button>
-                        <button onClick={toggleScreenShare} className={`p-2 rounded-lg transition-colors ${isScreenSharing ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-white'}`} title="画面共有"><MonitorUp size={18}/></button>
-                        <button onClick={leaveChannelCall} className="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors"><PhoneOff size={16}/> 切断</button>
-                      </div>
+
+                    <div className="h-24 bg-slate-950 border-t border-slate-800 flex items-center justify-center gap-4 md:gap-6 px-4 pb-4">
+                        <button onClick={toggleAudio} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-200 ${isAudioEnabled ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-rose-500/20 text-rose-500 hover:bg-rose-500/30'}`}>
+                            {isAudioEnabled ? <Mic size={24} /> : <MicOff size={24} />}
+                        </button>
+                        <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-200 ${isVideoEnabled ? 'bg-slate-700 hover:bg-slate-600 text-white' : 'bg-rose-500/20 text-rose-500 hover:bg-rose-500/30'}`}>
+                            {isVideoEnabled ? <Camera size={24} /> : <CameraOff size={24} />}
+                        </button>
+                        <button onClick={toggleScreenShare} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-200 ${isScreenSharing ? 'bg-indigo-500 hover:bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'bg-slate-700 hover:bg-slate-600 text-white'}`}>
+                            <MonitorUp size={24} />
+                        </button>
+                        
+                        <div className="w-px h-8 bg-slate-700 mx-2"></div>
+                        
+                        <button onClick={endCall} className="w-16 h-16 rounded-full flex items-center justify-center bg-rose-500 hover:bg-rose-600 text-white transition-all duration-200 hover:scale-105 shadow-lg shadow-rose-500/30">
+                            <PhoneOff size={28} />
+                        </button>
                     </div>
+                </div>
+            );
+        };
+
+        // --- ChatUI (チャット画面) ---
+        const ChatUI = ({ activeChat, user }) => {
+            const [messages, setMessages] = useState([]);
+            const [inputText, setInputText] = useState("");
+            const messagesEndRef = useRef(null);
+
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, [messages]);
+
+            // Firebase Firestoreからリアルタイムでメッセージを取得する
+            useEffect(() => {
+                if (!user) return; // 認証されるまで待機
+
+                const q = query(collection(db, 'channels', activeChat.id, 'messages'));
+                
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const msgs = [];
+                    snapshot.forEach((doc) => {
+                        msgs.push({ id: doc.id, ...doc.data() });
+                    });
                     
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 px-2">
-                      {/* 自分 */}
-                      <div className="relative bg-slate-800 rounded-xl overflow-hidden aspect-video shadow-lg border border-slate-700/50">
-                        {isVideoEnabled ? (
-                           <video ref={localVideoRef} autoPlay muted playsInline className={`w-full h-full object-cover ${!isScreenSharing ? 'transform scale-x-[-1]' : ''}`} />
+                    // 時間順に並び替え
+                    msgs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+                    setMessages(msgs);
+                }, (error) => {
+                    console.error("Firestore error:", error);
+                });
+
+                return () => unsubscribe();
+            }, [activeChat.id, user]);
+
+            const handleSend = async (e) => {
+                e.preventDefault();
+                if (!inputText.trim() || !user) return;
+                
+                const newMsg = {
+                    user: "あなた",
+                    avatar: "You",
+                    text: inputText,
+                    createdAt: Date.now(),
+                    time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                };
+                setInputText("");
+
+                try {
+                    // Firebase Firestoreに保存
+                    await addDoc(collection(db, 'channels', activeChat.id, 'messages'), newMsg);
+                } catch (error) {
+                    console.error("Error adding message:", error);
+                }
+            };
+
+            return (
+                <div className="flex-1 flex flex-col bg-slate-800">
+                    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                        {messages.length === 0 ? (
+                            <div className="h-full flex items-center justify-center text-slate-500 text-sm">
+                                まだメッセージはありません
+                            </div>
                         ) : (
-                           <div className="w-full h-full flex items-center justify-center bg-slate-800 text-slate-600"><CameraOff size={24}/></div>
+                            messages.map(msg => (
+                                <div key={msg.id} className="flex gap-4">
+                                    <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shrink-0 shadow-md bg-indigo-500">
+                                        {msg.avatar}
+                                    </div>
+                                    <div>
+                                        <div className="flex items-baseline gap-2 mb-1">
+                                            <span className="font-bold text-slate-200">{msg.user}</span>
+                                            <span className="text-xs text-slate-400">{msg.time}</span>
+                                        </div>
+                                        <div className="text-slate-200 leading-relaxed bg-slate-700/80 p-3 px-4 rounded-2xl rounded-tl-none inline-block shadow-sm">
+                                            {msg.text}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))
                         )}
-                        <div className="absolute bottom-2 left-2 bg-indigo-500/90 backdrop-blur-sm text-white text-xs px-2.5 py-1 rounded-md flex items-center gap-1.5 font-bold shadow-sm">あなた</div>
-                      </div>
-                      
-                      {/* 他の参加者 */}
-                      {Object.entries(remoteStreams).map(([uid, stream]) => (
-                        <RemoteVideoPlayer key={uid} stream={stream} uid={uid} usersList={usersList} />
-                      ))}
+                        <div ref={messagesEndRef} />
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
 
-            {/* メッセージリスト */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-slate-50 custom-scrollbar">
-              {messages.map((m, i) => {
-                const isMe = m.senderUid === userProfile.uid;
-                const senderProfile = isMe ? userProfile : usersList.find(u => u.uid === m.senderUid) || { name: m.sender };
-                const showHeader = i === 0 || messages[i-1].senderUid !== m.senderUid || (m.timestamp - messages[i-1].timestamp > 60000 * 5);
-
-                return (
-                  <div key={m.id} className={`flex gap-3 ${isMe ? 'flex-row-reverse' : ''}`}>
-                    {showHeader ? <UserAvatar user={senderProfile} size="w-9 h-9" /> : <div className="w-9 shrink-0"></div>}
-                    <div className={`flex flex-col max-w-[75%] ${isMe ? 'items-end' : 'items-start'}`}>
-                      {showHeader && <span className="text-xs text-slate-500 mb-1 ml-1 font-medium">{m.sender}</span>}
-                      <div className={`px-4 py-2.5 rounded-2xl shadow-sm text-[15px] ${isMe ? 'bg-indigo-500 text-white rounded-tr-sm' : 'bg-white border border-slate-100 text-slate-800 rounded-tl-sm'}`}>
-                        {m.text}
-                      </div>
+                    <div className="p-4 bg-slate-900 border-t border-slate-700">
+                        <form onSubmit={handleSend} className="flex gap-2 relative max-w-4xl mx-auto">
+                            <input 
+                                type="text" value={inputText} onChange={(e) => setInputText(e.target.value)}
+                                placeholder="メッセージを送信..." 
+                                className="flex-1 bg-slate-800 text-white rounded-full pl-6 pr-14 py-3 border border-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all shadow-inner"
+                            />
+                            <button type="submit" disabled={!inputText.trim()} className="absolute right-1.5 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full flex items-center justify-center bg-indigo-500 text-white disabled:opacity-50 disabled:bg-slate-700 transition-colors">
+                                <Send size={18} className="ml-0.5" />
+                            </button>
+                        </form>
                     </div>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
+                </div>
+            );
+        };
 
-            {/* メッセージ入力 */}
-            <div className="p-4 bg-white border-t border-slate-100">
-              <form onSubmit={handleSendMessage} className="flex gap-2 max-w-4xl mx-auto bg-slate-50 p-1.5 rounded-2xl border border-slate-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
-                <input type="text" value={inputText} onChange={e => setInputText(e.target.value)} placeholder={`#${activeChat.data.name} へメッセージを送信`} className="flex-1 bg-transparent px-4 outline-none text-slate-700" />
-                <button type="submit" disabled={!inputText} className="p-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl disabled:opacity-50 disabled:hover:bg-indigo-500 transition-colors"><Send size={18} /></button>
-              </form>
-            </div>
-          </div>
-        </div>
-      );
-    }
+        // --- Main App ---
+        const App = () => {
+            const [user, setUser] = useState(null);
 
-    const root = createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
+            // Firebaseの匿名認証 (セキュリティ設定対策)
+            useEffect(() => {
+                const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+                    setUser(currentUser);
+                });
+                signInAnonymously(auth).catch((error) => console.error("Auth Error:", error));
+                
+                return () => unsubscribe();
+            }, []);
+
+            const [activeChat, setActiveChat] = useState({ type: 'channel', id: 'general', name: '雑談' });
+            
+            // チャンネルリスト（雑談と休憩のみ）
+            const channels = [
+                { id: 'general', name: '雑談' },
+                { id: 'break', name: '休憩' }
+            ];
+
+            // DMのリスト（ダミーデータを完全に削除。機能の枠組みだけ残しています）
+            const [dms, setDms] = useState([]);
+
+            const [callState, setCallState] = useState({ mode: 'none' }); 
+            const [localStream, setLocalStream] = useState(null);
+            
+            const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+            const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+            const [isScreenSharing, setIsScreenSharing] = useState(false);
+            const [errorMsg, setErrorMsg] = useState("");
+
+            useEffect(() => {
+                if (errorMsg) {
+                    const timer = setTimeout(() => setErrorMsg(""), 5000);
+                    return () => clearTimeout(timer);
+                }
+            }, [errorMsg]);
+
+            const startCall = async () => {
+                try {
+                    setErrorMsg("");
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    setLocalStream(stream);
+                    setIsVideoEnabled(true);
+                    setIsAudioEnabled(true);
+                    setIsScreenSharing(false);
+                    setCallState({ mode: 'active' });
+                } catch (err) {
+                    console.error("Camera access error:", err);
+                    setErrorMsg("カメラまたはマイクへのアクセスが拒否されました。ブラウザの設定で許可してください。");
+                }
+            };
+
+            const endCall = () => {
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                }
+                setLocalStream(null);
+                setCallState({ mode: 'none' });
+                setIsScreenSharing(false);
+            };
+
+            const toggleAudio = () => {
+                if (localStream) {
+                    localStream.getAudioTracks().forEach(track => track.enabled = !track.enabled);
+                    setIsAudioEnabled(!isAudioEnabled);
+                }
+            };
+
+            const toggleVideo = () => {
+                if (localStream) {
+                    localStream.getVideoTracks().forEach(track => track.enabled = !track.enabled);
+                    setIsVideoEnabled(!isVideoEnabled);
+                }
+            };
+
+            const restoreCamera = async () => {
+                try {
+                    const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                    const camTrack = camStream.getVideoTracks()[0];
+                    setLocalStream(prevStream => {
+                        if (!prevStream) return camStream;
+                        return new MediaStream([camTrack, ...prevStream.getAudioTracks()]);
+                    });
+                    setIsScreenSharing(false);
+                    setIsVideoEnabled(true);
+                } catch (err) {
+                    console.error("Camera fallback error", err);
+                    setErrorMsg("カメラの再取得に失敗しました。");
+                }
+            };
+
+            const toggleScreenShare = async () => {
+                if (isScreenSharing) {
+                    localStream?.getVideoTracks().forEach(track => track.stop());
+                    await restoreCamera();
+                } else {
+                    try {
+                        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+                        const screenTrack = screenStream.getVideoTracks()[0];
+                        localStream?.getVideoTracks().forEach(track => track.stop());
+                        setLocalStream(prevStream => {
+                            const audioTracks = prevStream ? prevStream.getAudioTracks() : [];
+                            return new MediaStream([screenTrack, ...audioTracks]);
+                        });
+                        setIsScreenSharing(true);
+                        setIsVideoEnabled(true);
+                        screenTrack.onended = () => restoreCamera();
+                    } catch (err) {
+                        console.error("Screen share error", err);
+                    }
+                }
+            };
+
+            return (
+                <div className="flex h-screen bg-slate-900 text-slate-200 font-sans">
+                    {errorMsg && (
+                        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-rose-600 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 z-50 animate-bounce">
+                            <AlertCircle size={20} />
+                            <span className="font-medium text-sm">{errorMsg}</span>
+                            <button onClick={() => setErrorMsg("")} className="ml-2 hover:text-rose-200 transition-colors"><X size={16} /></button>
+                        </div>
+                    )}
+
+                    {/* サイドバー */}
+                    <div className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col hidden md:flex shrink-0">
+                        <div className="h-16 flex items-center px-6 font-black text-xl text-white border-b border-slate-800 shadow-sm">
+                            <MessageSquare className="mr-3 text-indigo-500" size={24} />
+                            ChatApp
+                        </div>
+                        <div className="p-4 flex-1">
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-2">チャンネル</div>
+                            <div className="space-y-1 mb-6">
+                                {channels.map(ch => (
+                                    <button 
+                                        key={ch.id}
+                                        onClick={() => setActiveChat({ type: 'channel', id: ch.id, name: ch.name })}
+                                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition-colors ${activeChat.id === ch.id ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800 text-slate-400'}`}
+                                    >
+                                        <Hash size={18} /> {ch.name}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 px-2">ダイレクトメッセージ</div>
+                            <div className="space-y-1">
+                                {dms.length === 0 ? (
+                                    <div className="text-sm text-slate-600 px-3 py-2">DMはありません</div>
+                                ) : (
+                                    dms.map(dm => (
+                                        <button 
+                                            key={dm.id}
+                                            onClick={() => setActiveChat({ type: 'dm', id: dm.id, name: dm.name })}
+                                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg font-medium transition-colors ${activeChat.id === dm.id ? 'bg-indigo-500/10 text-indigo-400' : 'hover:bg-slate-800 text-slate-400'}`}
+                                        >
+                                            <div className="relative">
+                                                <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-xs text-white">
+                                                    {dm.name.charAt(0)}
+                                                </div>
+                                                {dm.online && <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-500 border-2 border-slate-950 rounded-full"></div>}
+                                            </div>
+                                            {dm.name}
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                        <div className="p-4 bg-slate-900 border-t border-slate-800 flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-teal-500 flex items-center justify-center font-bold text-white relative shadow-md">
+                                You
+                                <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-slate-900 rounded-full"></div>
+                            </div>
+                            <div>
+                                <div className="font-bold text-sm text-slate-200">あなた</div>
+                                <div className="text-xs text-slate-400">オンライン</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* メインエリア */}
+                    <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-800 relative shadow-[-10px_0_20px_rgba(0,0,0,0.2)]">
+                        <header className="h-16 flex items-center justify-between px-4 md:px-6 border-b border-slate-700 bg-slate-900 shrink-0 z-10 shadow-sm">
+                            <div className="flex items-center gap-2 font-bold text-lg text-white">
+                                <Menu size={24} className="md:hidden text-slate-400 mr-2" />
+                                {activeChat.type === 'channel' ? <Hash size={20} className="text-slate-400" /> : <UserIcon size={20} className="text-slate-400" />}
+                                {activeChat.name}
+                            </div>
+                            {callState.mode === 'none' && (
+                                <button 
+                                    onClick={startCall}
+                                    className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 px-4 py-2 rounded-lg font-bold text-sm text-white transition-all shadow-lg shadow-indigo-500/20 hover:scale-105"
+                                >
+                                    <Phone size={18} />
+                                    <span className="hidden sm:inline">通話を開始</span>
+                                </button>
+                            )}
+                        </header>
+
+                        {callState.mode === 'active' ? (
+                            <CallUI 
+                                localStream={localStream} isAudioEnabled={isAudioEnabled} isVideoEnabled={isVideoEnabled} isScreenSharing={isScreenSharing}
+                                toggleAudio={toggleAudio} toggleVideo={toggleVideo} toggleScreenShare={toggleScreenShare} endCall={endCall}
+                            />
+                        ) : (
+                            <ChatUI key={activeChat.id} activeChat={activeChat} user={user} />
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
 </body>
 </html>
